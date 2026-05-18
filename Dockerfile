@@ -22,8 +22,9 @@ COPY --chmod=755 ./entrypoint.sh /opt/keycloak/bin/entrypoint.sh
 # The image is intended to sit behind a reverse proxy that terminates TLS,
 # so plain HTTP is accepted inside the container.  hostname-strict is
 # disabled because the public hostname varies by deployment; the entrypoint
-# patches the realm's frontend URL to match SERVER_HOST at runtime.  Both
-# are runtime options — override at `docker run` time if needed.
+# patches the realm's frontend URL and the webprotege client's redirect URIs
+# to match SERVER_HOST (and PUBLIC_SCHEME, defaulting to 'http') at runtime.
+# Both are runtime options — override at `docker run` time if needed.
 ENV KC_HTTP_ENABLED=true \
     KC_HOSTNAME_STRICT=false
 

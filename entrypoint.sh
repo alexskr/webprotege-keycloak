@@ -86,6 +86,16 @@
 #                 match.  When omitted, URI patching is skipped and the
 #                 realm retains whatever values it was imported with.
 #
+#   PUBLIC_SCHEME — 'http' or 'https'.  Default 'http'.  Used together with
+#                   SERVER_HOST to compose the public base URL.  Set to
+#                   'https' when the image runs behind a TLS-terminating
+#                   reverse proxy so the realm's frontendUrl, the client
+#                   redirect URIs, and (consequently) the OIDC discovery
+#                   document's issuer all match the URL the browser used.
+#                   Without this, Keycloak would advertise http:// endpoints
+#                   on an https:// page and the OIDC flow breaks at the
+#                   issuer check.
+#
 # DEPENDENCIES
 # ------------
 #   jq — Installed in the Docker image via a multi-stage build that
@@ -299,7 +309,14 @@ update_client_uris() {
     return
   fi
 
-  local client_id
+  local client_id public_scheme public_base
+
+  # Compose the public base URL from PUBLIC_SCHEME (default 'http') and
+  # SERVER_HOST.  Behind a TLS-terminating reverse proxy this should be
+  # 'https'; in dev where the browser talks directly to webprotege-nginx
+  # on port 80, leave unset to default to 'http'.
+  public_scheme="${PUBLIC_SCHEME:-http}"
+  public_base="${public_scheme}://${SERVER_HOST}"
 
   # Find the internal ID of the 'webprotege' client
   client_id=$($KCADM get clients -r webprotege --fields id,clientId \
@@ -311,21 +328,26 @@ update_client_uris() {
   fi
 
   # Update the client's base URL, redirect URI whitelist, and allowed web origins
-  echo "[entrypoint] Updating webprotege client URIs for SERVER_HOST=${SERVER_HOST}..."
+  echo "[entrypoint] Updating webprotege client URIs for ${public_base}..."
 
   $KCADM update "clients/$client_id" -r webprotege \
-    -s "baseUrl=http://${SERVER_HOST}" \
-    -s "redirectUris=[\"http://${SERVER_HOST}/*\",\"http://${SERVER_HOST}/webprotege/*\"]" \
-    -s "webOrigins=[\"http://${SERVER_HOST}/webprotege\"]"
+    -s "baseUrl=${public_base}" \
+    -s "redirectUris=[\"${public_base}/*\",\"${public_base}/webprotege/*\"]" \
+    -s "webOrigins=[\"${public_base}/webprotege\"]"
 
   # Update the realm-level frontend URL.  This controls URLs that Keycloak
-  # generates in emails, account console links, and the OpenID Connect
-  # discovery document.
-  echo "[entrypoint] Updating realm frontend URL..."
+  # generates in emails, account console links, and — most importantly —
+  # the OpenID Connect discovery document's 'issuer' field.  The realm JSON
+  # ships with a frontendUrl baked in at the dev hostname, so this overwrite
+  # runs on every startup; without it, back-channel callers (e.g. the
+  # gwt-api-gateway) that fetch the discovery doc via the internal bridge
+  # network would receive the imported value instead of the deployment's
+  # actual public URL, and Spring's issuer-uri validation would fail.
+  echo "[entrypoint] Updating realm frontend URL to ${public_base}/keycloak..."
   $KCADM update realms/webprotege \
-    -s "attributes.frontendUrl=http://${SERVER_HOST}/keycloak"
+    -s "attributes.frontendUrl=${public_base}/keycloak"
 
-  echo "[entrypoint] Client URIs and frontend URL updated for ${SERVER_HOST}."
+  echo "[entrypoint] Client URIs and frontend URL updated for ${public_base}."
 }
 
 # ---------------------------------------------------------------------------

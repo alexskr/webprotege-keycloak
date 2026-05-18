@@ -68,18 +68,25 @@ On subsequent boots where the mapper is already correct, the fix is skipped.
 
 ### 2. Hostname-Based Client URI Patching
 
-The realm JSON ships with a default hostname baked into the `webprotege`
-client's redirect URIs, web origins, and base URL.  Self-hosted deployments use
-different hostnames.  When the `SERVER_HOST` environment variable is set, the
-entrypoint updates these values so that:
+The realm JSON ships with a default hostname (and `http://` scheme) baked into
+the `webprotege` client's redirect URIs, web origins, and base URL, plus the
+realm-level frontend URL.  Self-hosted deployments use different hostnames, and
+deployments behind a TLS-terminating reverse proxy use `https://`.  When the
+`SERVER_HOST` environment variable is set, the entrypoint composes the public
+base URL as `${PUBLIC_SCHEME:-http}://${SERVER_HOST}` and updates these values
+so that:
 
 - Keycloak accepts OAuth redirects back to the correct host
 - CORS headers include the correct origin
 - The Keycloak login and account pages link back to the correct application URL
 - The realm's OpenID Connect discovery document advertises the correct issuer
+  (matching scheme — without this, an `https://` deployment serves a discovery
+  doc with `http://` URLs, breaking Spring's issuer-uri validation in
+  back-channel callers)
 
 This makes the image portable — the same build works for local development,
-staging, and production by setting `SERVER_HOST` in the deployment environment.
+staging, and production by setting `SERVER_HOST` (and `PUBLIC_SCHEME=https`
+behind a TLS-terminating proxy) in the deployment environment.
 
 ### Environment Variables
 
@@ -89,6 +96,7 @@ staging, and production by setting `SERVER_HOST` in the deployment environment.
 | `KEYCLOAK_ADMIN_PASSWORD` | Yes | `password` | Admin password for kcadm authentication |
 | `KC_HTTP_RELATIVE_PATH` | Yes | *(none)* | Keycloak's HTTP relative path (e.g. `/keycloak`) |
 | `SERVER_HOST` | No | *(none)* | Public hostname; when set, client URIs and the realm frontend URL are updated to match |
+| `PUBLIC_SCHEME` | No | `http` | `http` or `https`.  Used together with `SERVER_HOST` to compose the public base URL; set to `https` when fronted by a TLS-terminating proxy |
 
 ## Roles
 

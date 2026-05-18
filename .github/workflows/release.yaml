@@ -5,41 +5,32 @@ on:
     branches:
       - main
 
+permissions:
+  contents: write
+  packages: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
-    if: ${{ github.actor != 'protegeproject-bot[bot]' }}
+    # Skip the run triggered by the bot's own SNAPSHOT bump commit at the end
+    # of this workflow, otherwise the build would loop.
+    if: ${{ github.actor != 'github-actions[bot]' }}
     outputs:
-      version: ${{ steps.release-outputs.outputs.version }}
-      service: ${{ steps.release-outputs.outputs.service }}
+      version: ${{ steps.release-version.outputs.release_version }}
+      service: webprotege-keycloak
 
     steps:
-      - name: Login to Docker Hub
-        uses: docker/login-action@v2
-        with:
-          username: ${{secrets.DOCKER_USERNAME}}
-          password: ${{secrets.DOCKER_PASSWORD}}
-      - uses: actions/create-github-app-token@v1
-        id: app-token
-        with:
-          app-id: ${{ vars.PROTEGEPROJECT_BOT_APP_ID }}
-          private-key: ${{ secrets.PROTEGEPROJECT_BOT_APP_PRIVATE_KEY }}
       - uses: actions/checkout@v4
-        with:
-          token: ${{ steps.app-token.outputs.token }}
-          ref: ${{ github.head_ref }}
-      - name: Set up Maven Central Repository
+
+      - name: Set up JDK 17
         uses: actions/setup-java@v3
         with:
           java-version: '17'
           distribution: 'adopt'
-          server-id: docker.io
-          server-username: DOCKER_USERNAME
-          server-password: DOCKER_PASSWORD
 
       # Read the version from pom.xml and strip the -SNAPSHOT suffix to
-      # produce the release version.  For example, 2.0.0-SNAPSHOT becomes
-      # 2.0.0.  If there is no -SNAPSHOT suffix the version is used as-is.
+      # produce the release version.  For example, 2.0.2-SNAPSHOT becomes
+      # 2.0.2.  If there is no -SNAPSHOT suffix the version is used as-is.
       - name: Determine release version
         id: release-version
         run: |
@@ -47,15 +38,14 @@ jobs:
           echo "Current pom version: $current_version"
           release_version=$(echo "$current_version" | sed -E 's/-SNAPSHOT$//')
           echo "Release version: $release_version"
-          echo "release_version=$release_version" >> $GITHUB_OUTPUT
+          echo "release_version=$release_version" >> "$GITHUB_OUTPUT"
 
-      # Set pom.xml to the release version (without -SNAPSHOT), commit,
-      # and tag.  This is the commit that the Docker image is built from.
       - name: Set release version in pom.xml
         run: |
           find . -name 'pom.xml' -exec mvn versions:set \
             -DnewVersion=${{ steps.release-version.outputs.release_version }} \
             -DgenerateBackupPoms=false -f {} \;
+
       - name: Commit and tag release
         run: |
           git config --global user.name "github-actions[bot]"
@@ -69,29 +59,36 @@ jobs:
           git push origin HEAD:${GITHUB_REF##*/}
           git push origin ${{ steps.release-version.outputs.release_version }}
 
-      - name: Build and test SPI
+      - name: Build SPI
         run: mvn --batch-mode package
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Build a single-arch image and load it into the local Docker daemon
-      # so the entrypoint integration test can run against it.  --load only
-      # supports one platform at a time, so the multi-arch push happens in
-      # a separate step below.  Buildx caches layers between the two builds,
-      # so the amd64 layers are reused.
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Build a single-arch amd64 image and load it into the local daemon so
+      # the entrypoint integration test can run against it.  Buildx caches
+      # layers between this build and the multi-arch push below, so the amd64
+      # layers are reused.
       - name: Build image for integration test (amd64)
         uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64
           load: true
-          tags: protegeproject/webprotege-keycloak:${{ steps.release-version.outputs.release_version }}
+          tags: ghcr.io/${{ github.repository_owner }}/webprotege-keycloak:${{ steps.release-version.outputs.release_version }}
 
       - name: Run entrypoint integration test
-        run: ./test-entrypoint.sh protegeproject/webprotege-keycloak:${{ steps.release-version.outputs.release_version }}
+        run: ./test-entrypoint.sh ghcr.io/${{ github.repository_owner }}/webprotege-keycloak:${{ steps.release-version.outputs.release_version }}
 
       - name: Build and push multi-arch image
         uses: docker/build-push-action@v6
@@ -99,7 +96,8 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: protegeproject/webprotege-keycloak:${{ steps.release-version.outputs.release_version }}
+          tags: ghcr.io/${{ github.repository_owner }}/webprotege-keycloak:${{ steps.release-version.outputs.release_version }}
+
       - name: Release
         uses: softprops/action-gh-release@v1
         env:
@@ -108,9 +106,9 @@ jobs:
           tag_name: ${{ steps.release-version.outputs.release_version }}
           generate_release_notes: true
 
-      # After the release, bump the patch version and add -SNAPSHOT to
-      # prepare the pom for the next development cycle.  For example,
-      # after releasing 2.0.0 the pom is set to 2.0.1-SNAPSHOT.
+      # After the release, bump the patch version and add -SNAPSHOT to prepare
+      # the pom for the next development cycle.  For example, after releasing
+      # 2.0.2 the pom is set to 2.0.3-SNAPSHOT.
       - name: Prepare next development version
         run: |
           released=${{ steps.release-version.outputs.release_version }}
@@ -124,24 +122,3 @@ jobs:
           git add .
           git commit -m "Prepare next development version ($next_snapshot)"
           git push origin HEAD:${GITHUB_REF##*/}
-
-      - name: Set outputs
-        id: release-outputs
-        run: |
-          echo "version=${{ steps.release-version.outputs.release_version }}" >> $GITHUB_OUTPUT
-          echo "service=webprotege-keycloak" >> $GITHUB_OUTPUT
-
-  notify-bump:
-    needs: build
-    uses: ./.github/workflows/notify-deploy-project.yaml
-    with:
-      version: ${{ needs.build.outputs.version }}
-      service: ${{ needs.build.outputs.service }}
-      branch_var: ${{vars.BUMP_WEBPROTEGE_BRANCH}}
-    secrets:
-      PROTEGE_PROJECT_CLIENT_ID: ${{ secrets.PROTEGE_PROJECT_CLIENT_ID }}
-      PROTEGE_PROJECT_CLIENT_SECRET: ${{ secrets.PROTEGE_PROJECT_CLIENT_SECRET }}
-
-env:
-  DOCKER_USERNAME: ${{secrets.DOCKER_USERNAME}}
-  DOCKER_TOKEN: ${{secrets.DOCKER_PASSWORD}}
