@@ -96,7 +96,7 @@ behind a TLS-terminating proxy) in the deployment environment.
 | `KEYCLOAK_ADMIN_PASSWORD` | Yes | `password` | Admin password for kcadm authentication |
 | `KC_HTTP_RELATIVE_PATH` | Yes | *(none)* | Keycloak's HTTP relative path (e.g. `/keycloak`) |
 | `SERVER_HOST` | No | *(none)* | Public hostname; when set, client URIs and the realm frontend URL are updated to match |
-| `PUBLIC_SCHEME` | No | `http` | `http` or `https`.  Used together with `SERVER_HOST` to compose the public base URL; set to `https` when fronted by a TLS-terminating proxy |
+| `PUBLIC_SCHEME` | No | `http` | `http` or `https`.  Used together with `SERVER_HOST` to compose the public base URL; set to `https` when fronted by a TLS-terminating proxy.  When `http`, the master realm's `sslRequired` is relaxed to `NONE` so the admin console is reachable over plain HTTP; when `https`, the stock `external` default is left alone (TLS is satisfied via the proxy). |
 
 ## Roles
 

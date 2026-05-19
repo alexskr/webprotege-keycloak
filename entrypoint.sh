@@ -351,10 +351,41 @@ update_client_uris() {
 }
 
 # ---------------------------------------------------------------------------
+# relax_master_ssl_for_http
+#
+# Keycloak's stock master realm ships with sslRequired=external, meaning the
+# admin console refuses HTTP for any host that isn't loopback.  That blocks
+# the dev workflow of http://<dev-hostname>/keycloak/admin/ — operators see
+# "We are sorry... HTTPS required" instead of the login page.
+#
+# When the deployment is itself HTTP (PUBLIC_SCHEME=http or unset), flip the
+# master realm to sslRequired=NONE so the admin console is reachable over
+# plain HTTP.  Behind a TLS-terminating reverse proxy (PUBLIC_SCHEME=https)
+# the stock 'external' default is correct — admins reach the console via
+# https://, sslRequired is satisfied, and the setting acts as defence in
+# depth against accidental http:// access.
+#
+# Idempotent: kcadm update is a PUT, applying the same value is harmless.
+# Note: this only affects the *master* realm (the one the admin console
+# authenticates against).  The 'webprotege' realm ships with
+# sslRequired=NONE baked into webprotege.json, so application auth flows
+# always tolerate HTTP and we don't touch it here.
+# ---------------------------------------------------------------------------
+relax_master_ssl_for_http() {
+  if [ "${PUBLIC_SCHEME:-http}" != "http" ]; then
+    echo "[entrypoint] PUBLIC_SCHEME=${PUBLIC_SCHEME}; leaving master realm sslRequired at the stock 'external'."
+    return
+  fi
+  echo "[entrypoint] Setting master realm sslRequired=NONE so the admin console accepts HTTP..."
+  $KCADM update realms/master -s sslRequired=NONE
+}
+
+# ---------------------------------------------------------------------------
 # Apply the patches and hand control back to Keycloak.
 # ---------------------------------------------------------------------------
 fix_username_mapper
 update_client_uris
+relax_master_ssl_for_http
 
 echo "[entrypoint] Realm configuration complete."
 
